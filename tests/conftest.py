@@ -2,32 +2,33 @@
 Pytest configuration and fixtures.
 """
 import pytest
-from typing import Generator, AsyncGenerator
-from playwright.async_api import Page, BrowserContext
+from playwright.sync_api import Page as SyncPage
+from playwright.async_api import Page as AsyncPage
 from pages import LoginPage, InventoryPage
 
 
 @pytest.fixture
-def login_page(page: Page) -> LoginPage:
+def login_page(page) -> LoginPage:
     """Create a LoginPage instance."""
     return LoginPage(page)
 
 
 @pytest.fixture
-def inventory_page(page: Page) -> InventoryPage:
+def inventory_page(page) -> InventoryPage:
     """Create an InventoryPage instance."""
     return InventoryPage(page)
 
 
 @pytest.fixture
-async def authenticated_page(login_page: LoginPage) -> Page:
+async def authenticated_page(page):
     """
     Create an authenticated page session.
     Logs in with standard user and returns the page object.
     """
+    login_page = LoginPage(page)
     await login_page.navigate_to_login()
     await login_page.login("standard_user", "secret_sauce")
-    return login_page.page
+    return page
 
 
 # Test data fixtures

@@ -1,0 +1,7 @@
+pytest
+playwright
+pytest-playwright
+pytest-asyncio
+pytest-html
+pytest-xdist
+allure-pytest

@@ -1,0 +1,253 @@
+name: Playwright Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  test:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: [3.8, 3.9, "3.10", "3.11"]
+        browser: [chromium, firefox, webkit]
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Install Playwright browsers
+      run: |
+        playwright install --with-deps ${{ matrix.browser }}
+    
+    - name: Create test results directory
+      run: |
+        mkdir -p test-results/screenshots
+        mkdir -p test-results/logs
+        mkdir -p reports
+    
+    - name: Run Playwright tests
+      run: |
+        pytest --browser=${{ matrix.browser }} \
+               --html=reports/report-${{ matrix.browser }}-py${{ matrix.python-version }}.html \
+               --self-contained-html \
+               --junit-xml=test-results/junit-${{ matrix.browser }}-py${{ matrix.python-version }}.xml \
+               -v
+      env:
+        PYTHONPATH: .
+        HEADLESS: true
+        BROWSER: ${{ matrix.browser }}
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results-${{ matrix.browser }}-py${{ matrix.python-version }}
+        path: |
+          test-results/
+          reports/
+        retention-days: 30
+    
+    - name: Upload Playwright report
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: playwright-report-${{ matrix.browser }}-py${{ matrix.python-version }}
+        path: playwright-report/
+        retention-days: 30
+
+  # Smoke tests job - runs only critical tests quickly
+  smoke-tests:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Install Playwright browsers
+      run: |
+        playwright install --with-deps chromium
+    
+    - name: Run smoke tests
+      run: |
+        pytest -m smoke \
+               --browser=chromium \
+               --html=reports/smoke-test-report.html \
+               --self-contained-html \
+               -v
+      env:
+        PYTHONPATH: .
+        HEADLESS: true
+    
+    - name: Upload smoke test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: smoke-test-results
+        path: |
+          test-results/
+          reports/
+        retention-days: 7
+
+  # Security and code quality checks
+  quality-checks:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 black isort mypy
+        pip install -r requirements.txt
+    
+    - name: Run code formatting check (Black)
+      run: black --check --diff .
+    
+    - name: Run import sorting check (isort)
+      run: isort --check-only --diff .
+    
+    - name: Run linting (flake8)
+      run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+    
+    - name: Run type checking (mypy)
+      run: mypy --ignore-missing-imports pages/ utils/
+      continue-on-error: true  # Type checking is informational
+
+  # Parallel test execution for performance
+  parallel-tests:
+    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Install Playwright browsers
+      run: |
+        playwright install --with-deps
+    
+    - name: Run tests in parallel
+      run: |
+        pytest --browser=chromium \
+               -n auto \
+               --html=reports/parallel-test-report.html \
+               --self-contained-html \
+               --dist=worksteal \
+               -v
+      env:
+        PYTHONPATH: .
+        HEADLESS: true
+    
+    - name: Upload parallel test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: parallel-test-results
+        path: |
+          test-results/
+          reports/
+        retention-days: 15
+
+  # Generate combined test report
+  report:
+    needs: [test, smoke-tests, parallel-tests]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Download all test artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: all-test-results
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+    
+    - name: Generate combined report
+      run: |
+        python -c "
+        import os
+        import json
+        from datetime import datetime
+        
+        # Create a simple summary report
+        summary = {
+            'execution_time': datetime.now().isoformat(),
+            'workflow_run': '${{ github.run_number }}',
+            'commit_sha': '${{ github.sha }}',
+            'artifacts_generated': []
+        }
+        
+        # List all artifacts
+        for root, dirs, files in os.walk('all-test-results'):
+            for file in files:
+                if file.endswith('.html') or file.endswith('.xml'):
+                    summary['artifacts_generated'].append(os.path.join(root, file))
+        
+        # Save summary
+        with open('test-execution-summary.json', 'w') as f:
+            json.dump(summary, f, indent=2)
+        
+        print('Test Execution Summary Generated')
+        print(f'Total artifacts: {len(summary[\"artifacts_generated\"])}')
+        "
+    
+    - name: Upload execution summary
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-execution-summary
+        path: test-execution-summary.json
+        retention-days: 90
